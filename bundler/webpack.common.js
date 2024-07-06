@@ -82,6 +82,15 @@ module.exports = {
                         }
                     }
                 ]
+            },
+            {
+                test: /\.stl$/,
+                use: {
+                    loader: 'file-loader',
+                    options: {
+                        outputPath: 'assets/models/' // Adjust output path as needed
+                    }
+                }
             }
         ]
     }

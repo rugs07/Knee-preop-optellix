@@ -1,105 +1,250 @@
-import './style.css'
-import * as THREE from 'three'
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import * as dat from 'dat.gui'
+import "./style.css";
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { STLLoader } from "three/examples/jsm/loaders/STLLoader.js";
+import { GUI } from "dat.gui";
 
-// Debug
-const gui = new dat.GUI()
+let container, scene, camera, renderer, controls;
+let femur, tibia;
+const landmarks = [];
+const planes = [];
+let selectedLandmark = null;
 
-// Canvas
-const canvas = document.querySelector('canvas.webgl')
+document.addEventListener("DOMContentLoaded", () => {
+  init();
+  animate();
+});
 
-// Scene
-const scene = new THREE.Scene()
+function init() {
+  container = document.getElementById("container");
 
-// Objects
-const geometry = new THREE.TorusGeometry( .7, .2, 16, 100 );
+  // Scene
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xaaaaaa);
 
-// Materials
+  // Camera
+  camera = new THREE.PerspectiveCamera(
+    45,
+    window.innerWidth / window.innerHeight,
+    1,
+    1000
+  );
+  camera.position.z = 5;
 
-const material = new THREE.MeshBasicMaterial()
-material.color = new THREE.Color(0xff0000)
+  // Renderer
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  container.appendChild(renderer.domElement);
 
-// Mesh
-const sphere = new THREE.Mesh(geometry,material)
-scene.add(sphere)
+  // Controls
+  controls = new OrbitControls(camera, renderer.domElement);
 
-// Lights
+  // Lights
+  const ambientLight = new THREE.AmbientLight(0x404040);
+  scene.add(ambientLight);
 
-const pointLight = new THREE.PointLight(0xffffff, 0.1)
-pointLight.position.x = 2
-pointLight.position.y = 3
-pointLight.position.z = 4
-scene.add(pointLight)
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+  directionalLight.position.set(1, 1, 1).normalize();
+  scene.add(directionalLight);
 
-/**
- * Sizes
- */
-const sizes = {
-    width: window.innerWidth,
-    height: window.innerHeight
+  // Load STL Files
+  const loader = new STLLoader();
+  loader.load(
+    "/models/Right_Femur.stl",
+    (geometry) => {
+      console.log("Model loaded");
+      const material = new THREE.MeshPhongMaterial({
+        color: 0xff5573,
+        specular: 0x111111,
+        shininess: 200,
+      });
+      femur = new THREE.Mesh(geometry, material);
+      // femur.scale.set(10,10,10)
+    //   femur.position.set(0, 0, 0);
+      scene.add(femur);
+    },
+    (xhr) => {
+      console.log((xhr.loaded / xhr.total) * 100 + "% loaded");
+    },
+    (error) => {
+      console.log(error);
+    }
+  );
+
+  loader.load("/models/Right_Tibia.stl", (geometry) => {
+    const material = new THREE.MeshPhongMaterial({
+      color: 0x33ff55,
+      specular: 0x111111,
+      shininess: 200,
+    });
+    tibia = new THREE.Mesh(geometry, material);
+    // tibia.position.set(0, 0, 0);
+    scene.add(tibia);
+  });
+
+  // Landmark button handling
+  const buttonContainer = document.createElement("div");
+  buttonContainer.style.position = "absolute";
+  buttonContainer.style.top = "10px";
+  buttonContainer.style.left = "10px";
+  document.body.appendChild(buttonContainer);
+
+  const landmarksList = [
+    "Femur Center",
+    "Hip Center",
+    "Femur Proximal Canal",
+    "Femur Distal Canal",
+    "Medial Epicondyle",
+    "Lateral Epicondyle",
+    "Distal Medial Point",
+    "Distal Lateral Point",
+    "Posterior Medial Point",
+    "Posterior Lateral Point",
+  ];
+
+  landmarksList.forEach((name) => {
+    const button = document.createElement("button");
+    button.textContent = name;
+    button.onclick = () => selectLandmark(name);
+    buttonContainer.appendChild(button);
+  });
+
+  // Raycaster for detecting clicks
+  const raycaster = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+  container.addEventListener("click", onClick);
+
+  function onClick(event) {
+    if (!selectedLandmark) return;
+
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    raycaster.setFromCamera(mouse, camera);
+
+    const intersects = raycaster.intersectObjects([femur, tibia]);
+    if (intersects.length > 0) {
+      const intersect = intersects[0];
+      addLandmark(intersect.point);
+    }
+  }
+
+  function addLandmark(position) {
+    const geometry = new THREE.SphereGeometry(2, 32, 32);
+    const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+    const landmark = new THREE.Mesh(geometry, material);
+    landmark.position.copy(position);
+    scene.add(landmark);
+
+    landmarks.push({ name: selectedLandmark, object: landmark });
+    selectedLandmark = null;
+  }
+
+  // Update button functionality
+  const updateButton = document.createElement("button");
+  updateButton.textContent = "Update Axes";
+  updateButton.onclick = createAxesAndPlanes;
+  buttonContainer.appendChild(updateButton);
+
+  // Plane button functionality
+  const planeButton = document.createElement("button");
+  planeButton.textContent = "Create Perpendicular Plane";
+  planeButton.onclick = createPerpendicularPlane;
+  buttonContainer.appendChild(planeButton);
+
+  // GUI for interactive controls
+  const gui = new GUI();
+  const params = {
+    varusValgus: 0,
+    flexionExtension: 0,
+    update: function () {
+      updatePlanes();
+    },
+  };
+
+  gui
+    .add(params, "varusValgus", -10, 10)
+    .name("Varus/Valgus (°)")
+    .onChange(params.update);
+  gui
+    .add(params, "flexionExtension", -10, 10)
+    .name("Flexion/Extension (°)")
+    .onChange(params.update);
+
+  const resectionParams = {
+    showResection: true,
+  };
+
+  gui
+    .add(resectionParams, "showResection")
+    .name("Toggle Resection")
+    .onChange(() => {
+    });
+
+  window.addEventListener("resize", onWindowResize);
 }
 
-window.addEventListener('resize', () =>
-{
-    // Update sizes
-    sizes.width = window.innerWidth
-    sizes.height = window.innerHeight
-
-    // Update camera
-    camera.aspect = sizes.width / sizes.height
-    camera.updateProjectionMatrix()
-
-    // Update renderer
-    renderer.setSize(sizes.width, sizes.height)
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-})
-
-/**
- * Camera
- */
-// Base camera
-const camera = new THREE.PerspectiveCamera(75, sizes.width / sizes.height, 0.1, 100)
-camera.position.x = 0
-camera.position.y = 0
-camera.position.z = 2
-scene.add(camera)
-
-// Controls
-// const controls = new OrbitControls(camera, canvas)
-// controls.enableDamping = true
-
-/**
- * Renderer
- */
-const renderer = new THREE.WebGLRenderer({
-    canvas: canvas
-})
-renderer.setSize(sizes.width, sizes.height)
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-
-/**
- * Animate
- */
-
-const clock = new THREE.Clock()
-
-const tick = () =>
-{
-
-    const elapsedTime = clock.getElapsedTime()
-
-    // Update objects
-    sphere.rotation.y = .5 * elapsedTime
-
-    // Update Orbital Controls
-    // controls.update()
-
-    // Render
-    renderer.render(scene, camera)
-
-    // Call tick again on the next frame
-    window.requestAnimationFrame(tick)
+function onWindowResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
-tick()
+function selectLandmark(name) {
+  selectedLandmark = name;
+}
+
+function createAxesAndPlanes() {
+  const hipCenter = landmarks.find((l) => l.name === "Hip Center");
+  const femurCenter = landmarks.find((l) => l.name === "Femur Center");
+
+  if (hipCenter && femurCenter) {
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      hipCenter.object.position,
+      femurCenter.object.position,
+    ]);
+    const material = new THREE.LineBasicMaterial({ color: 0x0000ff });
+    const line = new THREE.Line(geometry, material);
+    scene.add(line);
+    planes.push(line);
+  }
+}
+
+function createPlane(normal, point, size) {
+  const planeGeometry = new THREE.PlaneGeometry(size, size);
+  const planeMaterial = new THREE.MeshBasicMaterial({
+    color: 0x00ff00,
+    side: THREE.DoubleSide,
+    transparent: true,
+    opacity: 0.5,
+  });
+  const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+
+  const quaternion = new THREE.Quaternion();
+  quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+  plane.applyQuaternion(quaternion);
+
+  plane.position.copy(point);
+
+  return plane;
+}
+
+function createPerpendicularPlane() {
+  const femurCenter = landmarks.find((l) => l.name === "Femur Center");
+  const hipCenter = landmarks.find((l) => l.name === "Hip Center");
+
+  if (femurCenter && hipCenter) {
+    const mechanicalAxis = new THREE.Vector3()
+      .subVectors(hipCenter.object.position, femurCenter.object.position)
+      .normalize();
+    const plane = createPlane(mechanicalAxis, femurCenter.object.position, 100);
+    scene.add(plane);
+    planes.push(plane);
+  }
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
